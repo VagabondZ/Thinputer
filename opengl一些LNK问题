@@ -1,0 +1,335 @@
+1. 引言
+
+    实验室的一个项目，用到OpenGL进行实时绘制，还用到一些其他的库，一个困扰我很久的问题就是编译时遇到的各种符号未定义，符号重定义之类的链接错误，其一般形式如下：
+
+xxx.obj : error LNK2019: 无法解析的外部符号__xx_xxx@xx，该符号在函数 _xxx 中被引用
+
+MSVCRTD.lib(ti_inst.obj) : error LNK2005: "private: class type_info & __thiscall type_info::operator=(class type_info const &)" (??4type_info@@AAEAAV0@ABV0@@Z) 已经在 LIBCMTD.lib(typinfo.obj) 中定义
+
+    简单的说，这种问题一般是缺少库（library，或库的版本不对）或多个库引用的CRT（C run-time library，C语言运行库）不一致造成的。本文对这一问题做简要探讨，并用glew、freeglut库的配置作为例子。
+
+ 
+
+2. 静态链接库、动态链接库、CRT、STL
+
+    我们要到一个函数，要么是需要该函数的源代码，要么是知道该函数的声明并有该函数的实现，这里的“实现”又分为静态链接库、动态链接库。在windows平台上，静态链接库对应以.lib为后缀的库文件，动态链接库对应.dll为后缀的动态链接库文件。关于静态链接库、动态链接库请参考wikipedia相应条目：
+
+http://en.wikipedia.org/wiki/Static_library
+http://en.wikipedia.org/wiki/Dynamic-link_library
+
+    我们用VC++写的程序默认编译为可执行文件（.exe），如果想发布自己的库，可以在VS的“项目属性 >> 配置属性 >> 常规 >> 配置类型”修改。这样如果以后想用这些函数就不需要引入对应.cpp文件，而只需包含带有该函数声明的头文件，并引用库文件即可——对于静态链接库，可以用“#pragma comment (lib, "xxx.lib")”指令，或在VS的“项目属性 >> 配置属性 >> 链接器 >> 输入 >> 附加依赖”中添加；对于动态链接库，可以用“__declspec(dllimport)”声明要用的函数，如果为.dll文件实现了导入库（对应的.lib文件，里面实现了函数导入，使用同静态链接库），则动态库的使用同静态库，只是程序执行时需要.dll文件。msdn上有静态库和动态库的使用教程：
+
+http://msdn.microsoft.com/en-us/library/ms235627.aspx
+http://msdn.microsoft.com/en-us/library/ms235636.aspx
+
+    简单总结，可执行文件（.exe）和库文件（.lib、.dll）都含有源代码编译出来的可执行二进制代码。静态链接和动态链接的区别在于：静态链接编译出的可执行代码体积较大，动态链接编译出的可执行代码执行时依赖对应的.dll文件。
+
+    CRT（C语言运行库）实现了C语言相关初始化代码以及实现了C函数库，C++可以看做C语言的超集，所以C++并没有“CPRT（C++运行库）”，C++也使用CRT，标准C++除CRT外还实现了STL（standard C++ library，C++标准库，注意STL是Standard Template Library的缩写，因为C++标准库主要是用模板实现的）。既然函数的“实现”至少有静态和动态之分，那CRT或STL也有不止一个版本，后文针对VC2010平台讨论这些版本。
+
+    总结，CRT是C语言函数库及初始化代码的实现，STL是C++标准库的实现，所谓“实现”就是由源代码编译出来的.lib、.dll文件等。
+
+ 
+
+3. VS的编译选项
+
+    在VC2010上，CRT和STL至少分为静态和动态，静态和动态中又各自有Debug和Release版本（早期VC还有单线程和多线程之分，目前VC++中只提供多线程版本），这样CRT和STL都有至少四个版本。现在来解释引言中的符号未定义、符号重定义链接错误的可能情景，程序A中调用了函数f，函数f是在程序B中编写的，为了使用f，将程序B编译为库（而非.exe）——静态库：B.lib\动态库：B.lib、B.dll，程序A为了使用f，包含头文件B.h（其中有函数f的声明）并引用B.lib：
+
+1 #include"B.h"
+2 #pragma comment (lib, "B.lib")
+    如果没有上面的第二句代码，则出现了符号未定义的链接错误：
+
+main.obj : error LNK2019: 无法解析的外部符号 _f@0，该符号在函数 _main 中被引用
+
+    上面错误信息中的“_f@0”具体取决于函数调用约定的命名方式（_cdecl、_stdcall等）。
+
+    如果编译程序B时使用了动态版本的CRT而编译A时使用的是静态版本CRT（即A、B使用了不同版本的CRT），则出现了符号重定义之类的链接错误（不绝对）。
+
+    当然如果用动态链接版本的B，程序A运行时可执行文件搜索路径中必须包含B.dll，否则报告“丢失xxx.dll”之类的错误。
+
+    设置程序到底使用哪个版本的CRT可在VS的“项目属性 >> 配置属性 >> C/C++ >> 代码生成 >> 运行库”中设置，现在将几种设置对应的库文件，编译器的宏定义列在下表：
+
+Option
+
+Preprocessor directives
+
+C run-time library (without iostream or standard C++ library)
+
+Standard C++ Library
+
+/MT
+
+_MT
+
+libcmt.lib
+
+LIBCPMT.LIB
+
+/MD
+
+_MT, _DLL
+
+msvcrt.lib (import library for MSVCR100.DLL)
+
+MSVCPRT.LIB (import library for MSVCP100.dll)
+
+/MTd
+
+_DEBUG, _MT
+
+libcmtd.lib
+
+LIBCPMTD.LIB
+
+/MDd
+
+_DEBUG, _MT, _DLL
+
+msvcrtd.lib (import library for MSVCR100D.DLL)
+
+MSVCPRTD.LIB (import library for MSVCP100D.DLL)
+
+    其中，MT为是multi-thread的缩写，上面说了，所有这些库都是多线程的，大写D代表DLL，小写d代表debug，如/MDd下引用动态链接调试版本的库，并且编译器定义宏_DEBUG, _MT, _DLL（程序中可以用#ifdef指令来判断库版本），引用的CRT实现文件为MSVCPRTD.LIB，该文件只是导入库并没有具体的执行二进制代码，程序运行时动态链接MSVCP100D.DLL文件，STL实现文件同理。
+
+    文件名“MSVC[R,P]100[D]”中的“100”对应VC2010，VC2003、VC2005、VC2008、VC2010、VC2012分别为71、80、90、100、110，有些时候我们运行一个程序提示“丢失msvcrxxx.dll”，可以通过安装对应VS来解决，如果不想安装VS，也可通过安装“Microsoft Visual C++ 20xx [SP1] Redistributable Package”来解决。
+
+    可参考msdn的C run-time libraries条目：
+
+http://msdn.microsoft.com/en-us/library/vstudio/abx4dbyh(v=vs.100).aspx
+
+ 
+
+4. 编译glew
+
+    可到以下地址下载最新glew：
+
+http://glew.sourceforge.net/
+
+    解压后打开...\glew-1.10.0\build\vc10\glew.sln文件，可以看到有“glew_shared”和“glew_static”两个项目，从右键属性中可以看到它们分别生成动态和静态的库：
+
+
+
+
+
+    还可以看到debug和release配置下分别使用相应debug和release版本CRT：
+
+
+
+
+
+    博文写到这里，发现一个问题，“glew_static”应该使用静态版本的CRT，但从上图看到，release下是静态链接（/MT），但debug下怎么不是“/MTd”呢？（后面会进一步分析）
+
+    在使用glew是需要包含相应头文件，并链接相应库文件，将上面生成的四个版本的库文件拷贝出来：
+
+
+
+    其中文件名中的s代表static，即静态链接，d代表debug，即调试版本，不带s的是动态链接版本，不带d的是release版本，文件名可以从glew工程的配置“项目属性 >> 常规 >> 目标文件名”中看到：
+
+
+
+    然后将...\glew-1.10.0\include\GL\下头文件拷贝出来：
+
+
+
+    将头文件所在路径添加到到VC2010项目包含目录中，有两种方法：“项目属性 >> 配置属性 >> VC++目录 >> 包含目录”或“项目属性 >> 配置属性 >> C/C++ >> 常规 >> 附加包含目录”，将库文件所在路径添加到到VC2010项目库目录中，也有两种方法：“项目属性 >> 配置属性 >> VC++目录 >> 库目录”或“项目属性 >> 配置属性 >> 链接器 >> 常规 >> 附加库目录”。
+
+    通过判断CRT版本来引用不同库（这样避免CRT版本不一致）：
+
+复制代码
+ 1 #ifdef _DLL // dynamic link
+ 2 　　#ifdef _DEBUG
+ 3 　　　　#pragma comment (lib, "glew32d.lib")
+ 4 　　　　#pragma comment (lib, "freeglutd.lib")
+ 5 　　#else
+ 6 　　　　#pragma comment (lib, "glew32.lib")
+ 7 　　　　#pragma comment (lib, "freeglut.lib")
+ 8 　　#endif
+ 9 #else // static link
+10 　　#ifdef _DEBUG
+11 　　　　#pragma comment (lib, "glew32sd.lib")
+12 　　　　#pragma comment (lib, "freeglutsd.lib")
+13 　　#else
+14 　　　　#pragma comment (lib, "glew32s.lib")
+15 　　　　#pragma comment (lib, "freegluts.lib")
+16 　　#endif
+17 　　#define GLEW_STATIC
+18 　　#define FREEGLUT_STATIC
+19 #endif
+20 #include "GL/glew.h"
+21 #include "GL/freeglut.h"
+复制代码
+    上述代码利用编译器在不同配置（/MT、/MD、/MTd、/MDd）下内置的不同宏来判断使用的CRT版本，并引用对应版本glew和freeglut库版本。
+
+    这样配置后编译自己的程序不会再出现引言中的链接错误了，但有很多如下警告：
+
+glew32s.lib(glew.obj) : warning LNK4099: 未找到 PDB“vc100.pdb”(使用“glew32s.lib(glew.obj)”或在“C:\Users\hll\Desktop\fluid 2014.01\Release\vc100.pdb”中寻找)；正在链接对象，如同没有调试信息一样
+
+    将glew工程配置成不生成调试信息，或把调试信息直接生成到.obj文件中（而非.pdb文件）即可，“项目属性 >> 配置属性 >> C/C++ >> 常规 >> 调试信息格式”，空表示不生成调试信息，C7把调试信息直接生成到.obj文件中，默认的Zi生成.pdb文件：
+
+
+
+    接着上面说到的“glew_static”的配置问题（往上找那段绿色的话），在自己工程配置为“/MTd”时引用glew32sd.lib库程序报错如下：
+
+1>------ 已启动生成: 项目: exampleGL, 配置: Debug_static Win32 ------
+1>生成启动时间为 2014/1/15 17:42:55。
+1>InitializeBuildStatus:
+1> 正在对“Debug_static\exampleGL.unsuccessfulbuild”执行 Touch 任务。
+1>ClCompile:
+1> 所有输出均为最新。
+1>ManifestResourceCompile:
+1> 所有输出均为最新。
+1>MSVCRTD.lib(ti_inst.obj) : error LNK2005: "private: __thiscall type_info::type_info(class type_info const &)" (??0type_info@@AAE@ABV0@@Z) 已经在 LIBCMTD.lib(typinfo.obj) 中定义
+1>MSVCRTD.lib(ti_inst.obj) : error LNK2005: "private: class type_info & __thiscall type_info::operator=(class type_info const &)" (??4type_info@@AAEAAV0@ABV0@@Z) 已经在 LIBCMTD.lib(typinfo.obj) 中定义
+1>LINK : warning LNK4098: 默认库“MSVCRTD”与其他库的使用冲突；请使用 /NODEFAULTLIB:library
+1>C:\Users\hll\Desktop\exampleGL\Debug_static\exampleGL.exe : fatal error LNK1169: 找到一个或多个多重定义的符号
+1>
+1>生成失败。
+1>
+1>已用时间 00:00:00.38
+========== 生成: 成功 0 个，失败 1 个，最新 0 个，跳过 0 个 ==========
+
+    利用上面VC2010编译配置表（往上找加粗的表），配置为“/MTd”使用的是库libcmtd.lib，而msvcrtd.lib是“/MDd”配置下使用的库，解决上述符号重定义错误的一个方法如下：
+
+#pragma comment (linker, "/NODEFAULTLIB:MSVCRTD.lib")
+    但很明显，这不是漂亮的解决方法，如果我们“擅自”将“glew_static”的上述配置“/MDd”改为“/MTd” （还是往上找那段绿色的话），这个问题也会消失，看来这可能是glew发布版（1.10.0）的一个bug（除了刚分析的“glew_static” debug的配置“/MDd”改为“/MTd”，还有一处，“glew_shared” release的配置“/MT”改为“/MD”），但这正好成就了我们对本文技术分析结果的完美应用~
+
+ 
+
+5. 编译freeglut
+
+    可到以下地址下载最新freeglut：
+
+http://freeglut.sourceforge.net/
+
+    有了glew编译经验，以及自己的工程配置经验之后，freeglut的编译这里就简单些说了。
+
+    解压后打开...\freeglut-2.8.1\VisualStudio\2010\freeglut.sln文件，可以看到它的配置略有不同：
+
+
+
+    再随便打开一个CRT配置可以看到：
+
+
+
+    freeglut并没有像glew那样在CRT配置上出现小bug（还是往上找那段绿色的话）。
+
+    好了，像glew一样，用配置管理器的4个选项（debug、release、debug_static、release_static，分别对应4个CRT版本）分别编译出4个版本的库（6个文件，4个.lib，2个.dll），但freeglut并没有像glew那样将4个版本的文件分别命名用或不用s及d结尾，它的debug版和release版文件名相同，我只好自己改啦（这一改带来很多问题）：
+
+
+
+    改为：
+
+
+
+    其他类推，并将freeglut_std.h文件中如下代码：
+
+...
+#　　　　pragma comment (lib, "freeglut_static.lib")
+...
+#　　　　　　pragma comment (lib, "freeglut.lib")
+...
+    修改为：
+
+复制代码
+...
+#　　　　ifdef _DEBUG
+#　　　　　　pragma comment (lib, "freeglutsd.lib")
+#　　　　else
+#　　　　　　pragma comment (lib, "freegluts.lib")
+#　　　　endif
+...
+#　　　　　　ifdef _DEBUG
+#　　　　　　　　pragma comment (lib, "freeglutd.lib")
+#　　　　　　else
+#　　　　　　　　pragma comment (lib, "freeglut.lib")
+#　　　　　　endif
+...
+复制代码
+    修改依据相同，还是根据CRT的4个版本引用4个版本的.lib文件。注意，我之前在freeglut项目中只做了“目标文件名”的修改，而未做.h文件的上述修改来编译freeglut（只是将.h文件拷贝出来后才修改，这样自己项目包含的是修改后的freeglut_std.h文件，而编译freeglut用的是原版），这样的结果是，生成出来的.lib文件内部仍在引用"freeglut_static.lib"（而不是"freegluts.lib"），用二进制打开生成的.lib文件如下：
+
+
+    使用未修改的freeglut_std.h文件生成"freegluts.lib" 后，自己工程包含修改后的freeglut_std.h，按说只引用"freegluts.lib"，但链接器仍报告找不到"freeglut_static.lib"文件。
+
+    另外一个类似的问题是，当编译动态链接debug版本的库时，生成文件为freeglutd.dll和freeglutd.lib（名字规则：非静态不带s，debug带d），头文件中引用"freeglutd.lib"将freeglutd.dll拷贝到VC2010自动生成的debug文件夹下（和自己工程生成的.exe文件同一文件夹），运行程序结果报告“丢失freeglut.dll”（不带我自己修改后的名字的d），编译freeglut生成的.lib和.dll文件名为freeglutd，但.lib文件内部引用的.dll文件名为freeglut（不带d），验证如下：
+
+
+
+    经过一番研究， freeglut的配置下，freeglutd.lib文件是链接器根据一个.def文件生成的（glew的导入库配置在“项目属性 >> 配置属性 >> 链接器 >> 高级 >> 导入库”）：
+
+    经查，第一行“LIBRARY freeglut”的含义正是“引用freeglut.dll”，将该句去掉，链接器生成的.lib文件引用的.dll文件自动和生成的.dll文件同名，问题解决：
+
+6. 搭建OpenGL工程
+
+    工程原则：将glew和freeglut库放在工程文件夹下以避免对环境依赖、不能出现任何关于库冲突等警告（错误当然更不可以）、根据CRT的4个版本定义4个配置（debug，release，debug_static，release_static）。
+
+    将上面的glew和freeglut的编译总结在下面：
+
+glew—
+
+1.bug修复，“glew_static” debug的配置“/MDd”改为“/MTd”，“glew_shared” release的配置“/MT”改为“/MD”
+
+2.不生成调试信息，“glew_static”和“glew_shared”所有配置下的“调试信息格式”改为空
+
+3.对“glew_static” debug及release 和 “glew_shared” debug及release分别编译，得到glew32sd.lib、glew32s.lib、glew32d.lib(glew32d.dll)、glew32.lib(glew32.dll)
+
+freeglut—
+
+1.生成目标文件名修改，“freeglut”的“目标文件名”项原来为和(ProjectName)和(ProjectName)_static，4个配置debug、release、debug_static、release_static分别改为、(ProjectName)d、(ProjectName)、、(ProjectName)sd、(ProjectName)s
+
+2.不生成调试信息，“freeglut”所有配置下的“调试信息格式”改为空
+
+3.freeglut_std.h文件修改如上述
+
+4.freeglutdll.def文件删去第一行的“LIBRARY freeglut”
+
+5.对“freeglut”的4个配置debug、release、debug_static、release_static分别编译，得到freeglutsd.lib、freegluts.lib、freeglutd.lib(freeglutd.dll)、freeglut.lib(freeglut.dll)
+
+    如下构造文件夹tool：
+
+tool
+　　freeglut-2.8.1
+　　　　bin
+　　　　　　freeglut.dll, freeglutd.dll
+　　　　inc
+　　　　　　GL
+　　　　　　　　freeglut.h, freeglut_ext.h, freeglut_std.h, glut.h
+　　　　lib
+　　　　　　freeglut.lib, freeglutd.lib, freegluts.lib, freeglutsd.lib
+　　glew-1.10.0
+　　　　bin
+　　　　　　glew32.dll, glew32d.dll
+　　　　inc
+　　　　　　GL
+　　　　　　　　glew.h, glxew.h, wglew.h
+　　　　lib
+　　　　　　glew32.lib, glew32d.lib, glew32s.lib, glew32sd.lib
+
+    如下构造VC2010工程：
+
+新建VS C++控制台项目，将上面tool文件夹拷贝到解决方案文件夹下
+
+打开配置管理器，添加Debug_static（从Debug复制）和Release_static（从Release复制）配置
+
+将Debug、Debug_static、Release、Release_static的“运行库”分别配置为：/MDd、/MTd、/MD、/MT
+
+在VS“项目属性 >> 配置属性 >> VC++目录 >> 包含目录”所有配置下添加如下项
+
+(SolutionDir)tool\glew−1.10.0\inc(SolutionDir)tool\freeglut-2.8.1\inc
+
+在VS“项目属性 >> 配置属性 >> VC++目录 >> 库目录”所有配置下添加如下项
+
+(SolutionDir)tool\glew−1.10.0\lib(SolutionDir)tool\freeglut-2.8.1\lib
+
+
+    考虑到方便本文的读者做实验，现将搭建的OpenGL工程exampleGL贡献出来（庸俗的代码水准让大家见笑了）：
+
+ 链接: http://pan.baidu.com/s/1kTuPUQz 密码: jiky
+
+ 
+
+7. 总结
+
+    在VC++上，CRT和STL有4个版本，分别对应编译选项：/MDd、/MTd、/MD、/MT；
+
+    根据编译选项的不同，开源程序编译出的库也分为多个版本（一般较全面的是4个，没有4个的可以手动添加配置），这些版本链接不同的CRT；
+
+    应根据自己程序的编译选项（用编译器预置宏来判断）链接对应的开源库，否则很有可能出现符号未定义、符号重定义的链接错误。
