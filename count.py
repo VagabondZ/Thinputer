@@ -1,3 +1,4 @@
+#日志统计脚本，手动归档版本
 import os
 import string
 import re
