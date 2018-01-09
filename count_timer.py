@@ -1,3 +1,4 @@
+#日志统计工具，定时器自定时版本
 import os
 import string
 import re
